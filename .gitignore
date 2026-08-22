@@ -1,0 +1,16 @@
+# bind-mounted container home dir: radar data, profiles, build output — not source
+data/
+
+# real dev script contains a plaintext VNC password — keep script.sh.example instead
+script.sh
+
+# mkdocs build output
+site/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# local Claude Code settings, machine-specific
+.claude/

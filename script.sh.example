@@ -1,0 +1,1 @@
+podman run -d   --name rocky8-radar-dev   -p 6901:6901   --shm-size=2g   -e VNC_PW=CHANGE_ME   -v ./data:/home/kasm-user   kasmweb/rockylinux-8-desktop:1.15.0
