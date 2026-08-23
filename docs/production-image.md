@@ -11,9 +11,16 @@ Once the manual dev setup in [ORPG install trace](orpg-install.md) is fully veri
 ## Planned approach
 
 1. **Base**: plain `rockylinux:8`, not the Kasm desktop image.
-2. **Build-time deps** (confirmed required by grepping `conf/*.make`, not just the official doc's list — see [ORPG install trace](orpg-install.md#dependency-gap-vs-the-doc)):
-   `gcc gcc-c++ gcc-gfortran ksh tcsh giflib-devel ncompress libtirpc-devel libnsl2-devel gtk2-devel gtk3-devel libgtop2-devel`
-   — drop `gtk2-devel`/`gtk3-devel`/`libgtop2-devel`/`tcsh` from the runtime image if the GUI tools (`hci`, `cvg`) aren't needed in production; they're only needed to build/run those specific utilities.
+2. **Build-time deps** — full list, confirmed by actually compiling (see [ORPG install trace](orpg-install.md)), not just grepping makefiles: the makefile grep found `gtk2/3-devel`, `libgtop2-devel`, `libtirpc-devel`, `libnsl2-devel`; the real build additionally needed `motif-devel`, `ncurses-devel`, `libxml2-devel`, `libcurl-devel`, `pam-devel`, `gd-devel`, `cracklib-devel` for GUI/utility tools the makefile grep didn't surface (headers included directly, not via `pkg-config`):
+
+   ```
+   gcc gcc-c++ gcc-gfortran ksh tcsh giflib-devel ncompress \
+     libtirpc-devel libnsl2-devel gtk2-devel gtk3-devel libgtop2-devel \
+     motif-devel ncurses-devel libxml2-devel libcurl-devel pam-devel \
+     gd-devel cracklib-devel
+   ```
+
+   Drop `gtk2-devel`/`gtk3-devel`/`libgtop2-devel`/`motif-devel`/`tcsh` from the runtime image if the GUI tools (`hci`, `cvg`) aren't needed in production; they're only needed to build/run those specific utilities. `validate_a2`'s makefile calls `pkg-config --cflags glib-2.0 libxml-2.0` as one combined call — if either `.pc` file is missing, `pkg-config` fails the whole call silently, dropping cflags for **both** libraries, not just the missing one. Worth remembering when debugging a "missing header for a library that's clearly installed" case.
 3. **Build stage**: extract `rpg_b24_0r1_20_pub_src.tgz` + `code_config_b24_0r1_20.tgz`, run `inst_env_config`, `make_rpg`, `inst_orpg_config` exactly as traced manually — turn the interactive prompts into scripted/non-interactive answers (`inst_env_config` and `inst_orpg_config` are `ksh` scripts that just read `y`/`n` and a Public/NWS choice from stdin, both scriptable with `echo`/heredoc).
 4. **Runtime stage**: multi-stage build, copy the compiled `$HOME` tree (binaries, libraries, `cfg/`) out of the build stage into a slim runtime image — don't ship the compiler toolchain or source tree in the final image.
 5. **Config**: bake in a real `Client:` value for `.rssd.conf` and `comms_link.conf` for the target deployment instead of the dev default of `rpg`.
