@@ -157,7 +157,28 @@ RPG System Startup Completed
 
 ## Result
 
-The ORPG (Public Edition, CODE B24.0r1.20) is compiled and running end to end inside `rocky8-radar-dev`. Not yet done (optional, not required for "running"): ingest test data (`play_a2 -d $HOME/ar2data`), launch the GUI (`hci`, needs the container's VNC/XFCE display), clean shutdown (`mrpg shutdown && mrpg cleanup`). See [Production image plan](production-image.md) for turning this manual trace into a real Containerfile.
+The ORPG (Public Edition, CODE B24.0r1.20) is compiled and running end to end inside `rocky8-radar-dev`. Not yet done (optional, not required for "running"): ingest test data (`play_a2 -d $HOME/ar2data`), clean shutdown (`mrpg shutdown && mrpg cleanup`). See [Production image plan](production-image.md) for turning this manual trace into a real Containerfile.
+
+## GUI (`hci`, `cvg`) — missing X11 core fonts
+
+Launching `hci` from the VNC desktop failed with:
+
+```
+Warning: Cannot convert string "-*-courier-bold-r-*-*-*-100-100-100-*-*-iso8859-1" to type FontStruct
+X Error of failed request:  BadName (named color or font does not exist)
+```
+
+Motif apps (`hci`, `cvg`) need the classic X11 core bitmap fonts, which a minimal Rocky8/Kasm image doesn't ship at all (`rpm -qa | grep xorg-x11-fonts` was empty). Fix:
+
+```bash
+podman exec --user root rocky8-radar-dev bash -c \
+  'dnf install -y xorg-x11-fonts-100dpi xorg-x11-fonts-75dpi xorg-x11-fonts-ISO8859-1-100dpi xorg-x11-fonts-ISO8859-1-75dpi xorg-x11-fonts-misc xorg-x11-fonts-Type1'
+DISPLAY=:1 xset fp rehash
+```
+
+No X server restart needed — the running KasmVNC `Xvnc` picks up the new `/etc/X11/fontpath.d` catalogue entries after `xset fp rehash`. Verified with a screenshot (`xwd -root | convert - png:-`, needs `xorg-x11-apps` + `ImageMagick`, also not present by default): `hci`'s RPG Control/Status panel renders cleanly, KMLB site, `Wideband Line has FAILED` / `RDA <-> RPG COMMUNICATIONS LINK BROKEN` alarms shown — expected, matches the doc's note that a Wideband Link Failure warning is normal without a real RDA connection.
+
+Add to the production-image dependency list if GUI tools are needed there: `xorg-x11-fonts-100dpi xorg-x11-fonts-75dpi xorg-x11-fonts-ISO8859-1-100dpi xorg-x11-fonts-ISO8859-1-75dpi xorg-x11-fonts-misc xorg-x11-fonts-Type1`.
 
 ### 7. Fix `.rssd.conf` `Client:`
 
