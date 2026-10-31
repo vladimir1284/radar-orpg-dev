@@ -14,3 +14,9 @@ __pycache__/
 
 # local Claude Code settings, machine-specific
 .claude/
+
+# ORPG source distribution zip (extracted into data/input/)
+*.zip
+
+# Third-party ORPG/CODE material (NOAA ROC): official guides, source, binaries. Only our own notes go in git.
+v1_setup_code_b24_0r1_20.md

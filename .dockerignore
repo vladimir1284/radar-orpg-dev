@@ -1,0 +1,3 @@
+*
+!*.zip
+!prod/entrypoint.sh

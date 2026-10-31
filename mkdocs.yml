@@ -1,5 +1,5 @@
 site_name: ORPG CODE B24 on Podman
-site_description: Trace of setting up the WSR-88D ORPG CODE B24.0r1.20 dev environment inside a Kasm rocky8 Podman container, towards a production image
+site_description: Trace of setting up the WSR-88D ORPG CODE B24.0r1.20 dev environment inside a Kasm rocky8 Podman container, and the resulting multi-arch production image
 theme:
   name: readthedocs
 
@@ -7,4 +7,4 @@ nav:
   - Overview: index.md
   - Container setup: container-setup.md
   - ORPG install trace: orpg-install.md
-  - Production image plan: production-image.md
+  - Production image: production-image.md

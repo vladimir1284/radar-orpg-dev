@@ -1,0 +1,64 @@
+# ORPG CODE B24.0r1.20 Public Edition -- production image (multi-stage).
+# Build context: repo root, which must contain the "CODERPG Build ... .zip" (see .dockerignore).
+#   docker build -f prod/Containerfile -t orpg-prod:b24 .
+
+FROM rockylinux:8 AS build
+
+RUN dnf install -y --allowerasing dnf-plugins-core epel-release \
+ && dnf config-manager --set-enabled powertools \
+ && dnf install -y --allowerasing \
+      make unzip tar gzip findutils which diffutils perl procps-ng hostname \
+      gcc gcc-c++ gcc-gfortran ksh tcsh giflib-devel ncompress \
+      libtirpc-devel libnsl2-devel gtk2-devel gtk3-devel libgtop2-devel \
+      motif-devel ncurses-devel libxml2-devel libcurl-devel pam-devel \
+      gd-devel cracklib-devel \
+ && dnf clean all
+
+RUN useradd -m -u 1000 orpg
+USER orpg
+ENV HOME=/home/orpg
+WORKDIR /home/orpg
+
+COPY --chown=orpg *.zip /tmp/coderpg.zip
+RUN mkdir input && unzip -q /tmp/coderpg.zip -d input \
+ && tar xzf input/rpg_b24_0r1_20_pub_src.tgz \
+ && tar xzf input/code_config_b24_0r1_20.tgz
+
+# bash -l so .bash_profile (written by inst_env_config) provides ORPGDIR, ARCH, PATH, ...
+SHELL ["/bin/bash", "-lc"]
+RUN cd code_config_b24_0r1_20/env && echo y | ./inst_env_config
+
+# "lnux_x86" is only a directory name; the flags are plain gcc. On aarch64 char is unsigned by default:
+# keep x86 semantics for this legacy C. No -march, so arm64 builds target baseline ARMv8-A (runs on v8.2).
+RUN if [ "$(uname -m)" = aarch64 ]; then \
+      sed -i 's/^\(COMMON_\(DEBUG\)\?C\(C\|XX\)FLAGS = \)/\1-fsigned-char /' conf/make.lnux_x86; \
+    fi
+
+# make_rpg exits 0 even when sub-makes fail: fail the build on any error in the log.
+RUN ./make_rpg $HOME > make_rpg.log 2>&1; \
+    E='\*\*\* \[.*\] Error|fatal error'; \
+    if grep -qE "$E" make_rpg.log; then grep -E "$E" make_rpg.log | head -20; exit 1; fi
+
+RUN cd code_config_b24_0r1_20/orpg && printf 'y\nP\n' | ./inst_orpg_config
+
+# Drop what only the build needs.
+RUN rm -rf src input code_config_b24_0r1_20 make_rpg.log /tmp/coderpg.zip
+
+FROM rockylinux:8 AS runtime
+
+RUN dnf install -y epel-release \
+ && dnf install -y --allowerasing \
+      ksh tcsh procps-ng hostname which ncompress \
+      libgfortran libstdc++ giflib libtirpc libnsl2 ncurses-libs libxml2 libcurl \
+      pam gd cracklib glib2 \
+      motif gtk2 gtk3 libgtop2 \
+ && dnf clean all
+
+RUN useradd -m -u 1000 orpg
+COPY --from=build --chown=orpg:orpg /home/orpg /home/orpg
+COPY --chmod=755 prod/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+USER orpg
+ENV HOME=/home/orpg
+WORKDIR /home/orpg
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

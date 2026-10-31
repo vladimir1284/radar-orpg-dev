@@ -1,6 +1,6 @@
 # ORPG install trace
 
-Following `v1_setup_code_b24_0r1_20.md` (Volume 1, Document 1), Public Edition, adapted for the container described in [Container setup](container-setup.md). Steps are logged here as they're actually run — this page reflects real command output, not the plan.
+Following the official CODE Volume 1, Document 1 setup guide (local, not in this repo), Public Edition, adapted for the container described in [Container setup](container-setup.md). Steps are logged here as they're actually run — this page reflects real command output, not the plan.
 
 ## Source files
 
@@ -65,6 +65,8 @@ podman exec rocky8-radar-dev bash -c 'cd $HOME/code_config_b24_0r1_20/env && ech
 ```
 
 Status: **done**. Replaced 9 config files (`make_rpg`, `test_make_cpc100`, `.cshrc`, `build_env_cshrc`, `orpg_env_cshrc`, `.bashrc`, `.bash_profile`, `build_env_profile`, `orpg_env_profile`) and 9 makefiles under `src/`.
+
+Replacing `.bashrc` breaks the Kasm desktop on its **next restart**, not immediately — see [Container setup](container-setup.md#inst_env_config-breaks-the-kasm-desktop-on-restart). Re-running `inst_env_config` re-breaks it.
 
 Key env vars from `orpg_env_profile`/`build_env_profile` (both sourced by `.bash_profile`, which is why every build/run command below uses `bash -lc`):
 
@@ -157,7 +159,7 @@ RPG System Startup Completed
 
 ## Result
 
-The ORPG (Public Edition, CODE B24.0r1.20) is compiled and running end to end inside `rocky8-radar-dev`. Not yet done (optional, not required for "running"): ingest test data (`play_a2 -d $HOME/ar2data`), clean shutdown (`mrpg shutdown && mrpg cleanup`). See [Production image plan](production-image.md) for turning this manual trace into a real Containerfile.
+The ORPG (Public Edition, CODE B24.0r1.20) is compiled and running end to end inside `rocky8-radar-dev`. Not yet done (optional, not required for "running"): ingest test data (`play_a2 -d $HOME/ar2data`). This manual trace is now automated as a Containerfile, including clean shutdown: see [Production image](production-image.md).
 
 ## GUI (`hci`, `cvg`) — missing X11 core fonts
 
@@ -179,11 +181,3 @@ DISPLAY=:1 xset fp rehash
 No X server restart needed — the running KasmVNC `Xvnc` picks up the new `/etc/X11/fontpath.d` catalogue entries after `xset fp rehash`. Verified with a screenshot (`xwd -root | convert - png:-`, needs `xorg-x11-apps` + `ImageMagick`, also not present by default): `hci`'s RPG Control/Status panel renders cleanly, KMLB site, `Wideband Line has FAILED` / `RDA <-> RPG COMMUNICATIONS LINK BROKEN` alarms shown — expected, matches the doc's note that a Wideband Link Failure warning is normal without a real RDA connection.
 
 Add to the production-image dependency list if GUI tools are needed there: `xorg-x11-fonts-100dpi xorg-x11-fonts-75dpi xorg-x11-fonts-ISO8859-1-100dpi xorg-x11-fonts-ISO8859-1-75dpi xorg-x11-fonts-misc xorg-x11-fonts-Type1`.
-
-### 7. Fix `.rssd.conf` `Client:`
-
-The doc's default `.rssd.conf` ships with `Client: rpg`, relying on a `rpg` hostname alias in `/etc/hosts` that doesn't exist in this container. Needs to be set to the container's actual hostname/IP. Pending — value not yet determined.
-
-### 8. Start and verify (`mrpg`, `rpg_ps`)
-
-Pending.

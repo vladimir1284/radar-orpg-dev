@@ -1,31 +1,128 @@
-# Production image plan
+# Production image
 
-Once the manual dev setup in [ORPG install trace](orpg-install.md) is fully verified (clean compile, `mrpg -p -v startup` succeeds, `rpg_ps` shows tasks up), replace the Kasm interactive-desktop container with a purpose-built production image.
+The manual trace in [ORPG install trace](orpg-install.md) is now a reproducible multi-stage image: `prod/Containerfile` + `prod/entrypoint.sh`. It builds the ORPG from the CODE source zip with no manual step, starts it to **RPG State: OPERATE / ONLINE** as the container's main process, and shuts it down cleanly on `docker stop`.
+
+Built locally for `linux/amd64` and `linux/arm64` and pushed to a **private** GHCR package (see [Publishing](#publishing-local-build-private-ghcr)). Verified end to end on amd64 only; [arm64](#arm64-armv82) is pending validation.
 
 ## Why not ship `rocky8-radar-dev` as-is
 
 - Base image (`kasmweb/rockylinux-8-desktop`) is built for interactive VNC desktop use: XFCE, KasmVNC, audio/printer/gamepad services, a profile-copy entrypoint — none of it relevant to running the ORPG as a service.
-- Dependencies were installed by hand via `dnf` inside a running container (see [ORPG install trace](orpg-install.md)) — not reproducible, not in any Containerfile.
+- Dependencies were installed by hand via `dnf` inside a running container — not reproducible.
 - The ORPG source tree was built directly into a bind-mounted `$HOME`, not baked into an image layer.
 
-## Planned approach
+## Build
 
-1. **Base**: plain `rockylinux:8`, not the Kasm desktop image.
-2. **Build-time deps** — full list, confirmed by actually compiling (see [ORPG install trace](orpg-install.md)), not just grepping makefiles: the makefile grep found `gtk2/3-devel`, `libgtop2-devel`, `libtirpc-devel`, `libnsl2-devel`; the real build additionally needed `motif-devel`, `ncurses-devel`, `libxml2-devel`, `libcurl-devel`, `pam-devel`, `gd-devel`, `cracklib-devel` for GUI/utility tools the makefile grep didn't surface (headers included directly, not via `pkg-config`):
+The build context is the repo root, which must contain the `CODERPG Build ... .zip` (gitignored; `.dockerignore` lets only the zip and `prod/entrypoint.sh` into the context):
 
-   ```
-   gcc gcc-c++ gcc-gfortran ksh tcsh giflib-devel ncompress \
-     libtirpc-devel libnsl2-devel gtk2-devel gtk3-devel libgtop2-devel \
-     motif-devel ncurses-devel libxml2-devel libcurl-devel pam-devel \
-     gd-devel cracklib-devel
-   ```
+```bash
+docker build -f prod/Containerfile -t orpg-prod:b24 .
+```
 
-   Drop `gtk2-devel`/`gtk3-devel`/`libgtop2-devel`/`motif-devel`/`tcsh` from the runtime image if the GUI tools (`hci`, `cvg`) aren't needed in production; they're only needed to build/run those specific utilities. `validate_a2`'s makefile calls `pkg-config --cflags glib-2.0 libxml-2.0` as one combined call — if either `.pc` file is missing, `pkg-config` fails the whole call silently, dropping cflags for **both** libraries, not just the missing one. Worth remembering when debugging a "missing header for a library that's clearly installed" case.
+### Build stage (`rockylinux:8`)
 
-   If the GUI tools ship in production, also add the X11 core bitmap fonts Motif needs at runtime (not build time) — a minimal Rocky8 image has none of these installed: `xorg-x11-fonts-100dpi xorg-x11-fonts-75dpi xorg-x11-fonts-ISO8859-1-100dpi xorg-x11-fonts-ISO8859-1-75dpi xorg-x11-fonts-misc xorg-x11-fonts-Type1`. Without them `hci`/`cvg` fail with `X Error ... BadName` on font load. See [ORPG install trace](orpg-install.md#gui-hci-cvg--missing-x11-core-fonts).
-3. **Build stage**: extract `rpg_b24_0r1_20_pub_src.tgz` + `code_config_b24_0r1_20.tgz`, run `inst_env_config`, `make_rpg`, `inst_orpg_config` exactly as traced manually — turn the interactive prompts into scripted/non-interactive answers (`inst_env_config` and `inst_orpg_config` are `ksh` scripts that just read `y`/`n` and a Public/NWS choice from stdin, both scriptable with `echo`/heredoc).
-4. **Runtime stage**: multi-stage build, copy the compiled `$HOME` tree (binaries, libraries, `cfg/`) out of the build stage into a slim runtime image — don't ship the compiler toolchain or source tree in the final image.
-5. **Config**: bake in a real `Client:` value for `.rssd.conf` and `comms_link.conf` for the target deployment instead of the dev default of `rpg`.
-6. **Entrypoint**: run `mrpg -p -v startup` (or the ORPG's own long-running mode) as PID 1 equivalent, drop the Kasm profile-copy/VNC/audio machinery entirely.
+Same steps as the manual trace, made non-interactive:
 
-Not started yet — this page will get an actual Containerfile once the manual trace is verified end to end.
+1. Toolchain + every `-devel` package the real build needed (the makefile grep alone misses half of them — see [Dependency gap](orpg-install.md#dependency-gap-vs-the-doc) and [Full build](orpg-install.md#5-full-build-make_rpg)):
+
+    ```
+    gcc gcc-c++ gcc-gfortran ksh tcsh giflib-devel ncompress \
+      libtirpc-devel libnsl2-devel gtk2-devel gtk3-devel libgtop2-devel \
+      motif-devel ncurses-devel libxml2-devel libcurl-devel pam-devel \
+      gd-devel cracklib-devel
+    ```
+
+2. Unzip, extract `rpg_b24_0r1_20_pub_src.tgz` + `code_config_b24_0r1_20.tgz` into `/home/orpg` (user `orpg`, uid 1000).
+3. `echo y | ./inst_env_config`. From here on every `RUN` uses `SHELL ["/bin/bash", "-lc"]` so `.bash_profile` provides `ORPGDIR`, `ARCH`, `PATH`, ...
+4. On aarch64 only: add `-fsigned-char` to the C/C++ flags (see [arm64](#arm64-armv82)).
+5. `./make_rpg $HOME`. **`make_rpg` exits 0 even when sub-makes fail**, so the step greps its log for `*** [...] Error` / `fatal error` and fails the build itself.
+6. `printf 'y\nP\n' | ./inst_orpg_config` — Public edition, KMLB sample site.
+7. Delete `src/`, the zip, the extracted archives and the build log.
+
+### Runtime stage (`rockylinux:8`)
+
+Only the runtime libraries (no compilers, no `-devel`), plus the compiled `/home/orpg` copied from the build stage. The GUI libraries (`motif gtk2 gtk3 libgtop2`) are still included so `hci`/`cvg` binaries can load. The X11 core fonts they need to actually render ([GUI fonts](orpg-install.md#gui-hci-cvg--missing-x11-core-fonts)) are **not** — this image is headless.
+
+Result: **437 MB** (amd64): 131 MB of runtime packages + 108 MB of compiled ORPG tree on top of the Rocky 8 base.
+
+## Run
+
+```bash
+docker login ghcr.io             # the package is private
+docker run -d --name orpg-prod --hostname orpg-prod --stop-timeout 30 ghcr.io/vladimir1284/orpg:b24
+docker logs -f orpg-prod      # ends with "RPG startup completed"
+```
+
+- `--hostname` should be pinned: `entrypoint.sh` writes `$(hostname)` into `.rssd.conf`'s `Client:` on every start, which is how the [manual `Client:` fix](orpg-install.md#7-fix-rssdconf-client) is automated.
+- `--stop-timeout 30`: see [Shutdown](#shutdown).
+- No volumes or ports. `mrpg -p startup` cleans every data store on start, so the container is stateless by design: removing and recreating it loses nothing.
+
+### Startup
+
+`entrypoint.sh` sources `.bash_profile`, runs `mrpg -p -v startup`, prints its log, then waits. Verified on amd64:
+
+```
+RPG State: OPERATE
+RPG Operability Status: ONLINE
+RPG System Startup Completed
+```
+
+Startup takes about 10 s. `rpg_ps` lists **107 tasks**; 114 processes in the container overall.
+
+### Shutdown
+
+`mrpg shutdown` only **sends** the command to the `mrpg` daemon and returns immediately. The operational tasks take about 7 s to actually exit afterwards. The first version of `entrypoint.sh` called `exit 0` right after the command, so PID 1 ended and Docker killed every task mid-shutdown — `docker stop` "succeeded" in 1 s with exit code 0, hiding it.
+
+The entrypoint now waits (up to 25 s) until only the infrastructure daemons remain. `rssd`, `mrpg`, `owr_server` and `nds` stay up by design after an ORPG shutdown, so they are excluded from the wait. Docker's default stop timeout is 10 s, close to the ~7 s the shutdown needs, hence `--stop-timeout 30`.
+
+Verified: `docker stop` → about 5 s → exit code 0 → `docker start` → ONLINE again.
+
+## arm64 (ARMv8.2)
+
+Status: **pending validation** — prepared, not yet built or run on arm64.
+
+What's in place, from reading the source (not from a build):
+
+- No x86-specific code: no inline assembly, no `-m32`/`-march`. `lnux_x86` is only the name of the `ARCH` directory and `conf/make.lnux_x86`; its flags are plain `gcc`/`gfortran`.
+- `LINUX_OS=$(uname -i)` (from `orpg_env_profile`) only distinguishes `x86_32` from everything else, so aarch64 takes the `RPG_OS64` path, same as x86_64.
+- The code assumes `LITTLE_ENDIAN_MACHINE`; Linux on aarch64 is little-endian.
+- **`char` signedness** is the main expected risk: unsigned by default on aarch64, signed on x86. The Containerfile adds `-fsigned-char` to the C/C++ flags on aarch64 only, keeping x86 semantics without touching the source.
+- No `-march`, so gcc targets baseline ARMv8-A, which runs on any ARMv8.2 CPU (Graviton2, Ampere Altra, Cortex-A76/Raspberry Pi 5, ...).
+- Every package in both stages exists for aarch64 in Rocky 8 + EPEL; `rockylinux:8` is multi-arch. Expected, not verified by a build.
+
+Possible failures still unknown until a real build: legacy code that treats `va_list` as a pointer (a struct on aarch64, compile error) and Fortran/C interop assumptions. A local QEMU build was started and cancelled; emulated, it was still installing packages after 10 minutes.
+
+### To validate (on a native arm64 machine)
+
+```bash
+uname -m                                   # aarch64
+docker build -f prod/Containerfile -t orpg-prod:b24-arm64 .   # repo root with the CODE zip
+docker run -d --name orpg-prod --hostname orpg-prod --stop-timeout 30 orpg-prod:b24-arm64
+docker logs -f orpg-prod                   # expect OPERATE / ONLINE / "RPG startup completed"
+docker exec orpg-prod bash -lc 'rpg_ps | grep -c "^ \+[A-Za-z_0-9]\+ \+[0-9]\+ "'   # amd64: 107
+time docker stop orpg-prod                 # expect a few seconds
+docker inspect orpg-prod --format '{{.State.ExitCode}}'   # expect 0
+```
+
+Also worth checking that no task died after startup (the task count above matching amd64), since a signedness or alignment bug is more likely to crash a task at runtime than to break the build. If it passes, publish it as the arm64 half of the tag: see [Publishing](#publishing-local-build-private-ghcr).
+
+## Publishing: local build, private GHCR
+
+The image contains the compiled ORPG plus its config files and scripts, so it's ORPG redistribution: **the GHCR package stays private**. This repo is public and only holds our own work (notes, `prod/`), so there's no CI here: a public workflow would need the CODE zip, and its build cache and logs would live in a public repo. Each architecture is built natively on its own machine and pushed by hand.
+
+Needs a token with `write:packages` (`gh auth refresh -s write:packages,read:packages`, then `gh auth token | docker login ghcr.io -u <user> --password-stdin`). Repo root must contain the CODE zip.
+
+```bash
+# on the amd64 machine
+docker build -f prod/Containerfile -t ghcr.io/vladimir1284/orpg:b24-amd64 .
+docker push ghcr.io/vladimir1284/orpg:b24-amd64
+
+# on the arm64 machine, after the validation above passes
+docker build -f prod/Containerfile -t ghcr.io/vladimir1284/orpg:b24-arm64 .
+docker push ghcr.io/vladimir1284/orpg:b24-arm64
+
+# on either: one multi-arch tag, docker pull picks the architecture
+docker buildx imagetools create -t ghcr.io/vladimir1284/orpg:b24 \
+  ghcr.io/vladimir1284/orpg:b24-amd64 ghcr.io/vladimir1284/orpg:b24-arm64
+```
+
+A new package pushed this way is private by default. Check it under **Your profile → Packages → orpg → Package settings**: visibility *Private*, and don't link it to this repo. A linked package can take its permissions from the repo.
